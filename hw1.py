@@ -1,7 +1,22 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import time
+import pandas as pd
 
+def load_real(filename: str, x_cols: list[str], y_col: str, n: int = 1000, prop_labeled: float = 0.1):
+    data = pd.read_csv(filename)
+    data = data[data['Species'] != 'Iris-versicolor']
+    if n > np.shape(data)[0]:
+        n = np.shape(data)[0]
+    xy = data[x_cols + [y_col]].sample(n)
+    x = xy[x_cols]
+    y = xy[y_col]
+    n_l = int(np.ceil(n*prop_labeled))
+    x_l = x[:n_l].to_numpy()
+    x_u = x[n_l:].to_numpy()
+    y_l = y[:n_l].to_numpy()
+    y_u = y[n_l:].to_numpy()
+    return x_l, x_u, y_l, y_u
 
 def generate_points(
     loc_1: tuple[float,float] = (0,0),
@@ -55,10 +70,10 @@ def calc_similarity(x_l, x_u, save_to=None):
     return sim_l, sim_u
 
 def similarity_labeled(point_1, point_2):
-    return 5/(np.sqrt((point_1[0] - point_2[0])**2 + (point_1[1] - point_2[1])**2)+0.0001)
+    return similarity_unlabeled(point_1, point_2)*5
     
 def similarity_unlabeled(point_1, point_2):
-    return similarity_labeled(point_1, point_2)/5
+    return 1/(np.sqrt((point_1[0] - point_2[0])**2 + (point_1[1] - point_2[1])**2)+0.1)
 
 def fx(y_l, y_u, sim_l, sim_u):
     u = np.dot(np.array(sim_l).flatten(), np.square(np.subtract.outer(y_l, y_u)).T.flatten())
@@ -79,7 +94,7 @@ def gradient_partial(
     # first term of the partial gradient
     res += np.sum([sim_l[i,j]*(y_j-y_i) for i,y_i in enumerate(y_l)])
     # second term of the partial gradient
-    res += np.sum([sim_u[i,j]*(y_j-y_i) for i,y_i in enumerate(y_u)])
+    res += np.sum([0 if i == j else sim_u[i,j]*(y_j-y_i) for i,y_i in enumerate(y_u)])
     return res*2
 
 def gradient(
@@ -97,8 +112,8 @@ def gd(
     y_u: list[float],
     sim_l:np.ndarray,
     sim_u:np.ndarray,
-    step_size: float = 0.1,
-    tol: float = 1,
+    step_size: float = 0.005,
+    tol: float = 1.5,
     max_iters: int = 1000,
     method: str = 'gd'):
     """
@@ -112,13 +127,13 @@ def gd(
     :param max_iters: max number of iterations
     :param method: 'gd' for gradient descent, 'bcgdc' for cyclic bcgd, 'bcgdr' for randomized bcgd; block size 1 in both cases
     """
-    # save target function values over iterations
-    y_history = [y_u]
-    # save time at iteration end
-    time_history = []
     if not method == 'gd':
         max_iters *= 1000 
     start_time = time.process_time()
+    # save time at iteration end
+    time_history = [start_time]
+    # save labels over iterations
+    y_history = [y_u]
     for k in range(max_iters):
         # normal gradient descent
         if method == 'gd':
@@ -154,55 +169,84 @@ def gd(
 
         time_history.append(time.process_time())
 
+        y_history.append(y_new)
         # stopping condition
+        print(np.linalg.norm(grad_k))
         if np.linalg.norm(grad_k) < tol:
             print('\nTERMINATED BY CONDITION\n on iter ' + str(k) + '\n')
             return y_history, np.array(time_history) - start_time
-        y_history.append(y_new)
     print('TERMINATED BY MAX ITER\n')
     return y_history, np.array(time_history) - start_time
 
 
 def main():
-    load_x = True
+    # 'new_rand', 'new_real', 'load'
+    data = 'load'
     save = True
 
     # Choose method
-    m = 'bcgdc'
+    m = 'bcgdr'
 
     # initialize points
-    if load_x:
+    if data == 'load':
         x_l = np.loadtxt('x_l.txt')
         x_u = np.loadtxt('x_u.txt')
         sim_l = np.loadtxt('sim_l.txt')
         sim_u = np.loadtxt('sim_u.txt')
-        labels = np.loadtxt('labels.txt')
-        u_labels = np.loadtxt('u_labels.txt')
+        y_l = np.loadtxt('labels.txt')
+        y_u_true = np.loadtxt('u_labels.txt')
         start_labels = np.loadtxt('start_labels.txt')
-    else:
+    elif data == 'new_rand':
         # generate points and calculate similarity matrices
-        x_l, x_u, labels, u_labels = generate_points()
+        x_l, x_u, y_l, y_u_true = generate_points()
         sim_l, sim_u = calc_similarity(x_l, x_u)
         # Initialize unknown labels with either {-1,1} or all 0
         start_labels = [np.random.choice(tuple({-1,1})) for _ in x_u]
         if save:
             np.savetxt('x_l.txt', x_l)
             np.savetxt('x_u.txt', x_u)
-            np.savetxt('labels.txt', labels)
-            np.savetxt('u_labels.txt', u_labels)
+            np.savetxt('labels.txt', y_l)
+            np.savetxt('u_labels.txt', y_u_true)
             np.savetxt('sim_l.txt', sim_l)
             np.savetxt('sim_u.txt', sim_u)
             np.savetxt('start_labels.txt', start_labels)
+    elif data == 'new_real':
+        # load Iris data
+        x_l, x_u, y_l, y_u_true = load_real(filename='Iris.csv', x_cols=['SepalLengthCm', 'SepalWidthCm'], y_col='Species')
+        y_l[y_l != 'Iris-setosa'] = -1
+        y_l[y_l == 'Iris-setosa'] = 1
+        y_u_true[y_u_true != 'Iris-setosa'] = -1
+        y_u_true[y_u_true == 'Iris-setosa'] = 1
+        y_u_true = y_u_true.astype('int')
+        y_l = y_l.astype('int')
+
+        # colors = ['r' if y == 1 else 'b' for y in y_l]
+        # plt.scatter(x=x_l.T[0], y=x_l.T[1], c=colors)
+        # plt.scatter(x=x_u.T[0], y=x_u.T[1], s=1)
+        # plt.show()
+
+        sim_l, sim_u = calc_similarity(x_l, x_u)
+        # Initialize unknown labels with either {-1,1} or all 0
+        start_labels = [np.random.choice(tuple({-1,1})) for _ in x_u]
+        if save:
+            np.savetxt('x_l.txt', x_l)
+            np.savetxt('x_u.txt', x_u)
+            np.savetxt('labels.txt', y_l)
+            np.savetxt('u_labels.txt', y_u_true)
+            np.savetxt('sim_l.txt', sim_l)
+            np.savetxt('sim_u.txt', sim_u)
+            np.savetxt('start_labels.txt', start_labels)
+        
 
     # do gradient descent
     y_hist, time_hist = gd(
-        y_l=labels, 
+        y_l=y_l, 
         y_u=start_labels,
         sim_l=sim_l, 
         sim_u=sim_u, 
         method=m)
     guess_labels = [[-1 if y < 0 else 1 for y in y_k] for y_k in y_hist]
-    acc_hist = np.array([np.sum(np.array(gl) == np.array(u_labels)) for gl in guess_labels])/len(y_hist[-1])
+    acc_hist = np.array([np.sum(np.array(gl) == np.array(y_u_true)) for gl in guess_labels])/len(y_hist[-1])
     # save results to file
     if save:
         np.savetxt('y_hist_{0}.txt'.format(m), y_hist)
@@ -210,7 +254,7 @@ def main():
         np.savetxt('time_hist_{0}.txt'.format(m),time_hist)
 
     _, ax1 = plt.subplots(nrows=1)
-    ax1.plot(time_hist, acc_hist)
+    ax1.plot(range(len(acc_hist)), acc_hist)
     ax1.set_ylabel('Accuracy')
     print(acc_hist[-1])
 

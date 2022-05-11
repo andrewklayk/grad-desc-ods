@@ -16,4 +16,4 @@ ax.set_ylabel('Accuracy')
 ax.set_xlabel('CPU time')
 ax.legend(['GD', 'Cyclic BCGD', 'Randomized BCGD'])
 
-plt.savefig('acc_time_plots')
+plt.savefig('acc_time_plots_real')
